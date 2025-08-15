@@ -74,7 +74,7 @@
                             <select name="tabla" class="form-select" required>
                                 <option value="">Seleccionar Tabla</option>
                                 {% for t in tablas %}
-                                <option>{{ t }}</option>
+                                <option value="{{ t }}">{{ t }}</option>
                                 {% endfor %}
                             </select>
                         </div>
@@ -83,7 +83,7 @@
                                 <i class="fas fa-file-csv"></i> Descargar Estructura
                             </button>
                             <button type="submit" name="action" value="descargar_datos" class="btn btn-outline-success">
-                                <i class="fas fa-file-excel"></i> Descargar Datos
+                                <i class="fas fa-file-csv"></i> Descargar Datos
                             </button>
                         </div>
                     </form>
@@ -98,7 +98,7 @@
                     <h5 class="card-title">
                         <i class="fas fa-upload"></i> Analizar y Normalizar
                     </h5>
-                    <form method="POST" enctype="multipart/form-data">
+                    <form method="POST" enctype="multipart/form-data" id="form-normalizar">
                         <input type="hidden" name="server" value="{{ server }}">
                         <input type="hidden" name="database" value="{{ db_name }}">
                         <div class="row">
@@ -195,6 +195,23 @@
     <!-- Bootstrap JS -->
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
     <script>
+        // Validación de archivos CSV
+        document.getElementById('form-normalizar')?.addEventListener('submit', function(e) {
+            const estructura = this.querySelector('input[name="estructura"]').files[0];
+            const datos = this.querySelector('input[name="datos"]').files[0];
+
+            if (estructura && !estructura.name.endsWith('.csv')) {
+                e.preventDefault();
+                alert('El archivo de estructura debe ser CSV.');
+                return;
+            }
+            if (datos && !datos.name.endsWith('.csv')) {
+                e.preventDefault();
+                alert('El archivo de datos debe ser CSV.');
+                return;
+            }
+        });
+
         // Animación de carga
         document.querySelectorAll('form').forEach(form => {
             form.addEventListener('submit', function(e) {
@@ -226,4 +243,4 @@
         });
     </script>
 </body>
-</html>
+</html> 
