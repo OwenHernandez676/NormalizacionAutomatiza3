@@ -1,159 +1,207 @@
 # utils.py
 import pyodbc
 import pandas as pd
-from sqlalchemy import create_engine
-import urllib
+from typing import List, Tuple, Dict
 
-def conectar_sql_server(server="localhost", database=None):
+def get_connection():
+    """
+    Establece conexión a SQL Server con autenticación de Windows
+    """
     try:
-        conn_str = (
-            f"DRIVER={{ODBC Driver 17 for SQL Server}};"
-            f"SERVER={server};"
-            f"{'DATABASE=' + database + ';' if database else ''}"
-            f"Trusted_Connection=yes;"
+        conn = pyodbc.connect(
+            'DRIVER={ODBC Driver 17 for SQL Server};'
+            'SERVER=localhost;'  # Cambia si usas otro servidor
+            'Trusted_Connection=yes;',
+            autocommit=False
         )
-        return pyodbc.connect(conn_str)
+        return conn
     except Exception as e:
-        print(f"❌ Error de conexión: {e}")
-        return None
+        raise Exception(f"Error al conectar a SQL Server: {str(e)}")
 
-def listar_bases_datos(server):
-    conn = conectar_sql_server(server)
-    if not conn:
-        return []
-    query = "SELECT name FROM sys.databases WHERE database_id > 4 ORDER BY name"
+def get_databases() -> List[str]:
+    """
+    Obtiene la lista de bases de datos disponibles
+    """
     try:
+        conn = get_connection()
+        query = "SELECT name FROM sys.databases WHERE database_id > 4 ORDER BY name"
         df = pd.read_sql(query, conn)
         conn.close()
         return df['name'].tolist()
     except Exception as e:
-        print(f"❌ Error listando bases de datos: {e}")
-        conn.close()
-        return []
+        raise Exception(f"Error al obtener bases de datos: {str(e)}")
 
-def listar_tablas(conn):
-    query = "SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_TYPE = 'BASE TABLE'"
+def get_tables(database: str) -> List[str]:
+    """
+    Obtiene las tablas de una base de datos específica
+    """
     try:
+        conn = get_connection()
+        conn.execute(f"USE [{database}]")
+        query = """
+            SELECT TABLE_NAME 
+            FROM INFORMATION_SCHEMA.TABLES 
+            WHERE TABLE_TYPE = 'BASE TABLE'
+            ORDER BY TABLE_NAME
+        """
         df = pd.read_sql(query, conn)
+        conn.close()
         return df['TABLE_NAME'].tolist()
     except Exception as e:
-        print(f"❌ Error listando tablas: {e}")
-        return []
+        raise Exception(f"Error al obtener tablas: {str(e)}")
 
-def leer_tabla(conn, table_name):
-    query = f"SELECT * FROM [{table_name}]"
+def get_table_structure(database: str, table: str) -> Tuple[List[Dict], List[str]]:
+    """
+    Obtiene la estructura de una tabla: atributos, tipos, llaves, dependencias
+    Retorna: (lista de columnas, lista de PK)
+    """
     try:
+        conn = get_connection()
+        conn.execute(f"USE [{database}]")
+
+        # Información de columnas
+        col_query = """
+        SELECT 
+            c.name AS atributo,
+            t.name AS tipo,
+            c.max_length,
+            c.precision,
+            c.scale,
+            c.is_nullable
+        FROM sys.columns c
+        JOIN sys.types t ON c.user_type_id = t.user_type_id
+        JOIN sys.tables tbl ON c.object_id = tbl.object_id
+        WHERE tbl.name = ?
+        ORDER BY c.column_id
+        """
+        cols_df = pd.read_sql(col_query, conn, params=[table])
+
+        # Clave primaria
+        pk_query = """
+        SELECT col.name AS atributo
+        FROM sys.indexes i
+        JOIN sys.index_columns ic ON i.object_id = ic.object_id AND i.index_id = ic.index_id
+        JOIN sys.columns col ON ic.object_id = col.object_id AND ic.column_id = col.column_id
+        JOIN sys.tables tbl ON i.object_id = tbl.object_id
+        WHERE i.is_primary_key = 1 AND tbl.name = ?
+        """
+        pk_df = pd.read_sql(pk_query, conn, params=[table])
+        pk_cols = pk_df['atributo'].tolist()
+
+        # Claves foráneas
+        fk_query = """
+        SELECT col.name AS atributo
+        FROM sys.foreign_key_columns fkc
+        JOIN sys.columns col ON fkc.parent_object_id = col.object_id AND fkc.parent_column_id = col.column_id
+        JOIN sys.tables tbl ON fkc.parent_object_id = tbl.object_id
+        WHERE tbl.name = ?
+        """
+        fk_df = pd.read_sql(fk_query, conn, params=[table])
+        fk_cols = fk_df['atributo'].tolist()
+
+        # Formatear tipo de dato
+        def format_type(row):
+            t = row['tipo'].upper()
+            if t in ['VARCHAR', 'NVARCHAR', 'CHAR', 'NCHAR']:
+                size = row['max_length']
+                return f"{t}({size})" if size > 0 else f"{t}(MAX)"
+            elif t == 'DECIMAL':
+                return f"DECIMAL({row['precision']},{row['scale']})"
+            elif t in ['INT', 'BIGINT', 'SMALLINT', 'TINYINT']:
+                return 'INT'
+            elif t == 'DATE':
+                return 'DATE'
+            elif t == 'DATETIME':
+                return 'DATETIME'
+            elif t == 'BIT':
+                return 'BIT'
+            else:
+                return t
+
+        cols_df['tipo'] = cols_df.apply(format_type, axis=1)
+        cols_df['llave'] = cols_df['atributo'].apply(
+            lambda x: 'PK' if x in pk_cols else 'FK' if x in fk_cols else ''
+        )
+
+        # Dependencias funcionales (desde PK)
+        non_pk_non_fk = [c for c in cols_df['atributo'] if c not in pk_cols and c not in fk_cols]
+        if pk_cols and non_pk_non_fk:
+            dep = f"{', '.join(pk_cols)} → {', '.join(non_pk_non_fk)}"
+        else:
+            dep = ""
+
+        # Añadir dependencia a todas las filas
+        cols_df['dependencia_funcional(A→B)'] = dep
+        cols_df['tabla'] = table
+
+        # Seleccionar columnas requeridas
+        structure = cols_df[[
+            'tabla', 'atributo', 'tipo', 'llave', 'dependencia_funcional(A→B)'
+        ]].to_dict('records')
+
+        conn.close()
+        return structure, pk_cols
+
+    except Exception as e:
+        conn.close()
+        raise Exception(f"Error al obtener estructura: {str(e)}")
+
+def get_table_data(database: str, table: str) -> pd.DataFrame:
+    """
+    Obtiene los datos de una tabla (hasta 1000 filas)
+    """
+    try:
+        conn = get_connection()
+        conn.execute(f"USE [{database}]")
+        query = f"SELECT TOP 1000 * FROM [{table}] ORDER BY (SELECT NULL)"
         df = pd.read_sql(query, conn)
-        df.name = table_name
+        conn.close()
         return df
     except Exception as e:
-        print(f"❌ Error al leer tabla [{table_name}]: {e}")
-        raise e
+        raise Exception(f"Error al obtener datos de la tabla: {str(e)}")
 
-def leer_estructura_desde_tabla(conn, table_name):
-    query_cols = f"""
-    SELECT 
-        c.name AS atributo,
-        t.name AS tipo,
-        c.max_length,
-        c.precision,
-        c.scale
-    FROM sys.columns c
-    JOIN sys.types t ON c.user_type_id = t.user_type_id
-    JOIN sys.tables tbl ON c.object_id = tbl.object_id
-    WHERE tbl.name = '{table_name}'
-    ORDER BY c.column_id
+def upload_normalized_tables(database: str, tables_dict: Dict[str, pd.DataFrame]):
     """
+    Sube múltiples tablas normalizadas a la base de datos
+    """
+    conn = get_connection()
+    cursor = conn.cursor()
     try:
-        df_cols = pd.read_sql(query_cols, conn)
+        cursor.execute(f"USE [{database}]")
+        for table_name, df in tables_dict.items():
+            # Eliminar tabla si existe
+            cursor.execute(f"IF OBJECT_ID('{table_name}', 'U') IS NOT NULL DROP TABLE [{table_name}];")
+
+            # Crear columnas
+            create_cols = []
+            for col_name, dtype in df.dtypes.items():
+                if dtype == 'object':
+                    sql_type = 'NVARCHAR(MAX)'
+                elif 'int' in str(dtype):
+                    sql_type = 'INT'
+                elif 'float' in str(dtype) or 'double' in str(dtype):
+                    sql_type = 'DECIMAL(18, 4)'
+                elif 'datetime' in str(dtype):
+                    sql_type = 'DATETIME'
+                elif dtype == 'bool':
+                    sql_type = 'BIT'
+                else:
+                    sql_type = 'NVARCHAR(255)'
+                create_cols.append(f"[{col_name}] {sql_type}")
+
+            create_query = f"CREATE TABLE [{table_name}] ({', '.join(create_cols)})"
+            cursor.execute(create_query)
+
+            # Insertar datos
+            for _, row in df.iterrows():
+                values = [str(v) if pd.notna(v) else None for v in row]
+                placeholders = ', '.join(['?' for _ in values])
+                insert_query = f"INSERT INTO [{table_name}] VALUES ({placeholders})"
+                cursor.execute(insert_query, values)
+
+        conn.commit()
     except Exception as e:
-        print(f"❌ Error al obtener columnas de {table_name}: {e}")
-        raise e
-
-    # Detectar PK
-    query_pk = f"""
-    SELECT ic.column_id
-    FROM sys.indexes i
-    JOIN sys.index_columns ic ON i.object_id = ic.object_id AND i.index_id = ic.index_id
-    JOIN sys.columns c ON ic.object_id = c.object_id AND ic.column_id = c.column_id
-    WHERE i.is_primary_key = 1 AND OBJECT_NAME(i.object_id) = '{table_name}'
-    """
-    try:
-        pk_cols = pd.read_sql(query_pk, conn)['column_id'].tolist()
-    except Exception:
-        pk_cols = []
-
-    # Detectar FK
-    query_fk = f"""
-    SELECT fkc.constraint_column_id
-    FROM sys.foreign_key_columns fkc
-    JOIN sys.tables t1 ON fkc.parent_object_id = t1.object_id
-    WHERE t1.name = '{table_name}'
-    """
-    try:
-        fk_cols = pd.read_sql(query_fk, conn)['constraint_column_id'].tolist()
-    except Exception:
-        fk_cols = []
-
-    estructura = []
-    for idx, row in df_cols.iterrows():
-        col_name = row['atributo']
-        col_id = idx + 1
-
-        tipo = row['tipo']
-        if tipo in ['varchar', 'char', 'nvarchar', 'nchar']:
-            tamaño = row['max_length']
-            if tamaño == -1:
-                tamaño = 'MAX'
-            tipo = f"VARCHAR({tamaño})"
-        elif tipo in ['decimal', 'numeric']:
-            tipo = f"DECIMAL({row['precision']},{row['scale']})"
-        elif tipo == 'int':
-            tipo = 'INT'
-        elif tipo == 'date':
-            tipo = 'DATE'
-        elif tipo == 'datetime':
-            tipo = 'DATETIME'
-        else:
-            tipo = tipo.upper()
-
-        llave = ""
-        if col_id in pk_cols:
-            llave = "PK"
-        if col_id in fk_cols:
-            llave = "FK" if not llave else "PK,FK"
-
-        dependencia = ""
-        if col_name == "IdCliente":
-            dependencia = "IdCliente → Nombre, Email"
-        elif col_name == "IdOrden":
-            dependencia = "IdOrden → Fecha, IdCliente"
-        elif col_name == "IdArticulo":
-            dependencia = "IdArticulo → NombreArt, Precio"
-        elif col_name == "Cantidad":
-            dependencia = "IdOrden, IdArticulo → Cantidad"
-
-        estructura.append({
-            'tabla': table_name,
-            'atributo': col_name,
-            'tipo': tipo,
-            'llave': llave,
-            'dependencia_funcional(A→B)': dependencia
-        })
-
-    return pd.DataFrame(estructura)
-
-def crear_tabla_desde_df(conn, nombre_tabla, df):
-    try:
-        params = urllib.parse.quote_plus(
-            f"DRIVER={{ODBC Driver 17 for SQL Server}};"
-            f"SERVER=localhost;"
-            f"DATABASE={conn.getinfo(pyodbc.SQL_DATABASE_NAME)};"
-            f"Trusted_Connection=yes;"
-        )
-        engine = create_engine(f"mssql+pyodbc:///?odbc_connect={params}")
-        df.to_sql(nombre_tabla, engine, if_exists='replace', index=False)
-        return True
-    except Exception as e:
-        print(f"❌ Error al crear tabla {nombre_tabla}: {e}")
-        return False
+        conn.rollback()
+        raise Exception(f"Error al subir tablas normalizadas: {str(e)}")
+    finally:
+        conn.close()

@@ -4,6 +4,7 @@
     --success-gradient: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
     --warning-gradient: linear-gradient(135deg, #fa709a 0%, #fee140 100%);
     --info-gradient: linear-gradient(135deg, #a8edea 0%, #fed6e3 100%);
+    --danger-gradient: linear-gradient(135deg, #ff6a6a 0%, #ee5a78 100%);
 }
 
 body {
@@ -43,22 +44,32 @@ body {
     overflow: hidden;
 }
 
-.btn-primary {
-    background: var(--primary-gradient);
-    border: none;
+.btn-primary, .btn-warning, .btn-success, .btn-info, .btn-danger {
+    border-radius: 10px;
     font-weight: 600;
     transition: all 0.3s ease;
 }
 
-.btn-primary:hover {
-    transform: translateY(-2px);
-    box-shadow: 0 8px 25px rgba(102, 126, 234, 0.3);
+.btn-primary {
+    background: var(--primary-gradient);
+    border: none;
 }
 
-.btn-outline-info, .btn-outline-success {
-    border-radius: 10px;
-    font-size: 0.9rem;
-    font-weight: 600;
+.btn-warning {
+    background: var(--warning-gradient);
+    border: none;
+    color: white;
+}
+
+.btn-danger {
+    background: var(--danger-gradient);
+    border: none;
+    color: white;
+}
+
+.btn-primary:hover, .btn-warning:hover, .btn-danger:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 8px 25px rgba(102, 126, 234, 0.3);
 }
 
 .form-control, .form-select {
@@ -69,10 +80,6 @@ body {
 .form-control:focus, .form-select:focus {
     border-color: #667eea;
     box-shadow: 0 0 0 0.25rem rgba(102, 126, 234, 0.15);
-}
-
-.table {
-    font-size: 0.9rem;
 }
 
 .table th {
@@ -123,6 +130,7 @@ body {
     display: none;
 }
 
+/* Responsive */
 @media (max-width: 768px) {
     .main-container {
         margin: 1rem;
@@ -132,6 +140,9 @@ body {
         font-size: 2rem;
     }
     .btn-group {
+        flex-direction: column;
+    }
+    .d-flex {
         flex-direction: column;
     }
 }
