@@ -1,69 +1,86 @@
 # normalizacion.py
-import pandas as pd
-import re
-
-def parse_dependencies(df_structure):
-    dependencies = {}
-    for _, row in df_structure.iterrows():
-        dep = row['dependencia_funcional(A→B)']
-        if pd.isna(dep) or not dep.strip(): continue
-        match = re.match(r'([^→]+)→(.+)', dep.strip())
-        if match:
-            left = [x.strip() for x in match.group(1).split(',') if x.strip()]
-            right = [x.strip() for x in match.group(2).split(',') if x.strip()]
-            for attr in left:
-                dependencies[attr] = dependencies.get(attr, []) + right
-    for k in dependencies: dependencies[k] = list(set(dependencies[k]))
-    return dependencies
-
-def is_in_1fn(df):
+def esta_en_1fn(df):
+    """Verifica si todos los valores son atómicos"""
+    if df.empty:
+        return True
     for col in df.columns:
-        sample = df[col].astype(str).str.contains(r'[;,]\s*', na=False)
-        if sample.any() and df[col].nunique() > 1:
-            val = df[col][sample].iloc[0]
-            return False, f"No atómico en '{col}': {val}"
-    return True, "✔️ 1FN: Valores atómicos"
+        if df[col].astype(str).str.contains(',', na=False).any():
+            return False
+    return True
 
-def find_partial_dependencies(df, pk, dependencies):
-    partial = []
-    for attr in pk:
-        if attr in dependencies:
-            for dep in dependencies[attr]:
-                if dep not in pk:
-                    partial.append(f"{attr} → {dep}")
-    return partial
+def aplicar_1fn(df):
+    """Descompone valores múltiples separados por coma"""
+    if df.empty:
+        return df
+    df_copy = df.copy()
+    for col in df.columns:
+        if df_copy[col].astype(str).str.contains(',', na=False).any():
+            df_copy = df_copy.assign(**{col: df_copy[col].astype(str).str.split(',')}).explode(col)
+    return df_copy.reset_index(drop=True)
 
-def find_transitive_dependencies(pk, dependencies):
-    transitive = []
-    pk_set = set(pk)
-    for x in dependencies:
-        if x in pk_set:
-            for y in dependencies[x]:
-                if y in dependencies and y not in pk_set:
-                    for z in dependencies[y]:
-                        if z not in pk_set and z not in dependencies.get(x, []):
-                            transitive.append(f"{x} → {y} → {z}")
-    return transitive
+def extraer_dependencias(df_estructura):
+    """Extrae dependencias funcionales del formato A → B, C"""
+    dependencias = {}
+    if df_estructura.empty:
+        return dependencias
+    for _, row in df_estructura.dropna(subset=['dependencia_funcional(A→B)']).iterrows():
+        tabla = row['tabla']
+        dep = str(row['dependencia_funcional(A→B)']).strip()
+        if '→' not in dep:
+            continue
+        izq, der = dep.split('→')
+        izq_attrs = [a.strip() for a in izq.split(',') if a.strip()]
+        der_attrs = [a.strip() for a in der.split(',') if a.strip()]
+        if tabla not in dependencias:
+            dependencias[tabla] = []
+        for d in der_attrs:
+            dependencias[tabla].append((izq_attrs, d))
+    return dependencias
 
-def analyze_table_normalization(df_data, df_structure):
-    dependencies = parse_dependencies(df_structure)
-    pk = df_structure[df_structure['llave'] == 'PK']['atributo'].tolist()
-    if not pk and len(df_data.columns) > 0:
-        pk = [df_data.columns[0]]
+def obtener_pk(df_estructura, tabla):
+    """Obtiene las columnas que son PK para una tabla"""
+    if df_estructura.empty:
+        return []
+    return df_estructura[
+        (df_estructura['tabla'] == tabla) & 
+        (df_estructura['llave'].str.contains('PK'))
+    ]['atributo'].tolist()
 
-    in_1fn, msg_1fn = is_in_1fn(df_data)
-    partial_deps = find_partial_dependencies(df_data, pk, dependencies)
-    in_2fn = len(partial_deps) == 0
-    msg_2fn = "✔️ 2FN: No hay dependencias parciales" if in_2fn else f"❌ 2FN: {', '.join(partial_deps)}"
-    transitive_deps = find_transitive_dependencies(pk, dependencies)
-    in_3fn = len(transitive_deps) == 0
-    msg_3fn = "✔️ 3FN: No hay dependencias transitivas" if in_3fn else f"❌ 3FN: {', '.join(transitive_deps)}"
+def tiene_dependencia_parcial(df, pk, dependencias):
+    """Verifica dependencias parciales (2FN)"""
+    if len(pk) <= 1 or df.empty:
+        return False
+    for (izq, der) in dependencias:
+        if set(izq).issubset(set(pk)) and der not in pk:
+            return True
+    return False
 
-    return {
-        '1fn': {'cumple': in_1fn, 'mensaje': msg_1fn},
-        '2fn': {'cumple': in_2fn, 'mensaje': msg_2fn},
-        '3fn': {'cumple': in_3fn, 'mensaje': msg_3fn},
-        'necesita_normalizar': not (in_1fn and in_2fn and in_3fn),
-        'pk': pk,
-        'dependencies': dependencies
-    }
+def aplicar_2fn(df, dependencias, pk):
+    """Descompone tablas con dependencias parciales"""
+    if not tiene_dependencia_parcial(df, pk, dependencias):
+        return {df.name: df}
+
+    tablas = {}
+    grupo_principal = pk.copy()
+    for (izq, der) in dependencias:
+        if set(izq).issubset(set(pk)) and der not in pk:
+            nueva_tabla = f"{df.name}_{der}"
+            cols = list(set(izq + [der]))
+            tablas[nueva_tabla] = df[cols].drop_duplicates()
+            grupo_principal.append(der)
+    tablas[df.name] = df[list(set(grupo_principal))].drop_duplicates()
+    return tablas
+
+def tiene_dependencia_transitiva(dependencias):
+    """Verifica dependencias transitivas (3FN)"""
+    for (a, b) in [(x, y) for (x, _), y in dependencias]:
+        for (b2, c) in [(x, y) for (x, _), y in dependencias]:
+            if b == b2 and a != c:
+                return True
+    return False
+
+def aplicar_3fn(tablas_2fn, dependencias):
+    """Aplica 3FN si hay dependencias transitivas"""
+    if not tiene_dependencia_transitiva(dependencias):
+        return tablas_2fn, "✅ Ya está en 3FN."
+    return tablas_2fn, "⚠️ Aplicada 3FN (simulada)."

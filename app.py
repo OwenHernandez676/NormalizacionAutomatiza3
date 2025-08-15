@@ -1,260 +1,299 @@
 # app.py
-from flask import Flask, render_template, request, jsonify, send_file
+from flask import Flask, render_template, request, send_file, make_response
 import pandas as pd
-from io import StringIO, BytesIO
-import pyodbc
-import zipfile
 import os
+import io
+
+# Importar funciones desde otros módulos
+try:
+    from utils import (
+        conectar_sql_server,
+        listar_bases_datos,
+        listar_tablas,
+        leer_tabla_completa,
+        leer_estructura_completa
+    )
+    from normalizacion import (
+        esta_en_1fn,
+        aplicar_1fn,
+        extraer_dependencias,
+        obtener_pk,
+        tiene_dependencia_parcial,
+        aplicar_2fn,
+        tiene_dependencia_transitiva
+    )
+except Exception as e:
+    print(f"❌ Error al importar módulos: {e}")
 
 app = Flask(__name__)
+app.config['UPLOAD_FOLDER'] = 'data/input'
+app.config['OUTPUT_FOLDER'] = 'data/output'
+os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
+os.makedirs(app.config['OUTPUT_FOLDER'], exist_ok=True)
 
-# --- Conexión a SQL Server ---
-def get_connection():
-    try:
-        return pyodbc.connect(
-            'DRIVER={ODBC Driver 17 for SQL Server};'
-            'SERVER=localhost;'
-            'Trusted_Connection=yes;',
-            autocommit=False
-        )
-    except Exception as e:
-        raise Exception(f"Error de conexión: {e}")
-
-def get_databases():
-    conn = get_connection()
-    query = "SELECT name FROM sys.databases WHERE database_id > 4"
-    df = pd.read_sql(query, conn)
-    conn.close()
-    return df['name'].tolist()
-
-def get_tables(database):
-    conn = get_connection()
-    conn.execute(f"USE [{database}]")
-    query = "SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_TYPE = 'BASE TABLE'"
-    df = pd.read_sql(query, conn)
-    conn.close()
-    return df['TABLE_NAME'].tolist()
-
-def get_table_structure(database, table):
-    conn = get_connection()
-    conn.execute(f"USE [{database}]")
-    col_query = """
-    SELECT 
-        c.name AS atributo,
-        t.name AS tipo,
-        c.max_length,
-        c.precision,
-        c.scale,
-        c.is_nullable
-    FROM sys.columns c
-    JOIN sys.types t ON c.user_type_id = t.user_type_id
-    JOIN sys.tables tbl ON c.object_id = tbl.object_id
-    WHERE tbl.name = ?
-    """
-    cols = pd.read_sql(col_query, conn, params=[table])
-
-    pk_query = """
-    SELECT col.name AS atributo
-    FROM sys.indexes i
-    JOIN sys.index_columns ic ON i.object_id = ic.object_id AND i.index_id = ic.index_id
-    JOIN sys.columns col ON ic.object_id = col.object_id AND ic.column_id = col.column_id
-    JOIN sys.tables tbl ON i.object_id = tbl.object_id
-    WHERE i.is_primary_key = 1 AND tbl.name = ?
-    """
-    pk_cols = pd.read_sql(pk_query, conn, params=[table])['atributo'].tolist()
-
-    fk_query = """
-    SELECT col.name AS atributo
-    FROM sys.foreign_key_columns fkc
-    JOIN sys.columns col ON fkc.parent_object_id = col.object_id AND fkc.parent_column_id = col.column_id
-    JOIN sys.tables tbl ON fkc.parent_object_id = tbl.object_id
-    WHERE tbl.name = ?
-    """
-    fk_cols = pd.read_sql(fk_query, conn, params=[table])['atributo'].tolist()
-
-    def format_type(row):
-        t = row['tipo'].upper()
-        if t in ['VARCHAR', 'NVARCHAR', 'CHAR', 'NCHAR']:
-            size = row['max_length']
-            return f"{t}({size})" if size > 0 else f"{t}(MAX)"
-        elif t == 'DECIMAL':
-            return f"DECIMAL({row['precision']},{row['scale']})"
-        elif t == 'INT': return 'INT'
-        elif t == 'DATE': return 'DATE'
-        else: return t
-
-    cols['tipo'] = cols.apply(format_type, axis=1)
-    cols['llave'] = cols['atributo'].apply(
-        lambda x: 'PK' if x in pk_cols else 'FK' if x in fk_cols else ''
-    )
-    pk_str = ', '.join(pk_cols)
-    non_key = [c for c in cols['atributo'] if c not in pk_cols and c not in fk_cols]
-    dep = f"{pk_str} → {', '.join(non_key)}" if non_key else ""
-    cols['dependencia_funcional(A→B)'] = dep
-    cols['tabla'] = table
-
-    conn.close()
-    return cols[['tabla', 'atributo', 'tipo', 'llave', 'dependencia_funcional(A→B)']].to_dict('records'), pk_cols
-
-def get_table_data(database, table):
-    conn = get_connection()
-    conn.execute(f"USE [{database}]")
-    df = pd.read_sql(f"SELECT TOP 1000 * FROM [{table}]", conn)
-    conn.close()
-    return df
-
-def upload_normalized_tables(database, tables_dict):
-    conn = get_connection()
-    cursor = conn.cursor()
-    try:
-        cursor.execute(f"USE [{database}]")
-        for name, df in tables_dict.items():
-            drop = f"IF OBJECT_ID('{name}', 'U') IS NOT NULL DROP TABLE [{name}];"
-            create_cols = []
-            for col, dtype in df.dtypes.items():
-                if dtype == 'object': sql_type = 'NVARCHAR(MAX)'
-                elif 'int' in str(dtype): sql_type = 'INT'
-                elif 'float' in str(dtype): sql_type = 'DECIMAL(18,2)'
-                elif 'datetime' in str(dtype): sql_type = 'DATETIME'
-                else: sql_type = 'NVARCHAR(255)'
-                create_cols.append(f"[{col}] {sql_type}")
-            create = f"CREATE TABLE [{name}] ({', '.join(create_cols)})"
-            cursor.execute(drop + create)
-            for _, row in df.iterrows():
-                vals = [str(v) if pd.notna(v) else None for v in row]
-                placeholders = ', '.join(['?' for _ in vals])
-                cursor.execute(f"INSERT INTO [{name}] VALUES ({placeholders})", vals)
-        conn.commit()
-    except Exception as e:
-        conn.rollback()
-        raise Exception(f"Error al subir: {e}")
-    finally:
-        conn.close()
-
-@app.route('/')
+@app.route('/', methods=['GET', 'POST'])
 def index():
-    databases = get_databases()
-    return render_template('index.html', databases=databases)
+    bases_datos = []
+    tablas = []
+    analisis = {}
+    server = request.form.get('server', 'localhost')
+    db_name = request.form.get('database')
+    modo = request.form.get('modo', 'conexion')  # 'conexion' o 'archivos'
 
-@app.route('/get_tables/<database>')
-def get_tables_route(database):
-    try:
-        return jsonify(get_tables(database))
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
+    if request.method == 'POST':
+        action = request.form.get('action')
 
-@app.route('/download_structure/<database>/<table>')
-def download_structure(database, table):
-    try:
-        structure, _ = get_table_structure(database, table)
-        df = pd.DataFrame(structure)
-        csv_buffer = StringIO()
-        df.to_csv(csv_buffer, index=False)
-        csv_buffer.seek(0)
-        return send_file(
-            StringIO(csv_buffer.getvalue()),
-            mimetype='text/csv',
-            as_attachment=True,
-            download_name='estructura.csv'
-        )
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-@app.route('/download_data/<database>/<table>')
-def download_data(database, table):
-    try:
-        df = get_table_data(database, table)
-        csv_buffer = StringIO()
-        df.to_csv(csv_buffer, index=False)
-        csv_buffer.seek(0)
-        return send_file(
-            StringIO(csv_buffer.getvalue()),
-            mimetype='text/csv',
-            as_attachment=True,
-            download_name=f'{table}.csv'
-        )
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-@app.route('/download_all/<database>')
-def download_all(database):
-    try:
-        tables = get_tables(database)
-        memory = BytesIO()
-        with zipfile.ZipFile(memory, 'w', zipfile.ZIP_DEFLATED) as zf:
-            for table in tables:
-                df = get_table_data(database, table)
-                csv_buffer = StringIO()
-                df.to_csv(csv_buffer, index=False)
-                zf.writestr(f'{table}.csv', csv_buffer.getvalue())
-        memory.seek(0)
-        return send_file(
-            memory,
-            mimetype='application/zip',
-            as_attachment=True,
-            download_name=f'{database}_completa.zip'
-        )
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-from normalizacion import analyze_table_normalization
-
-@app.route('/analyze_db/<database>')
-def analyze_db(database):
-    try:
-        tables = get_tables(database)
-        results = {}
-        for table in tables:
+        # --- Listar bases de datos ---
+        if action == 'listar_bd':
             try:
-                structure, _ = get_table_structure(database, table)
-                df_structure = pd.DataFrame(structure)
-                df_data = get_table_data(database, table)
-                results[table] = analyze_table_normalization(df_data, df_structure)
+                bases_datos = listar_bases_datos(server)
+                if db_name:
+                    conn = conectar_sql_server(server, db_name)
+                    if conn:
+                        tablas = listar_tablas(conn)
+                        conn.close()
+                return render_template('index.html',
+                                       server=server,
+                                       bases_datos=bases_datos,
+                                       db_name=db_name,
+                                       tablas=tablas,
+                                       modo=modo)
             except Exception as e:
-                results[table] = {'error': str(e)}
-        return jsonify(results)
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
+                print(f"❌ Error en listar_bd: {e}")
+                return f"<h3>❌ Error: {e}</h3><p>Verifica la conexión a SQL Server.</p>", 500
 
-@app.route('/analyze_csv', methods=['POST'])
-def analyze_csv():
-    if 'estructura' not in request.files or 'datos' not in request.files:
-        return jsonify({'error': 'Faltan archivos'}), 400
-    try:
-        df_estructura = pd.read_csv(request.files['estructura'].stream)
-        df_datos = pd.read_csv(request.files['datos'].stream)
-        result = analyze_table_normalization(df_datos, df_estructura)
-        return jsonify({'tabla': 'Desde CSV', 'resultado': result})
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        # --- Descargar estructura.csv (todas las tablas) ---
+        elif action == 'descargar_estructura':
+            try:
+                conn = conectar_sql_server(server, db_name)
+                if not conn:
+                    return "❌ No se pudo conectar a SQL Server", 500
 
-@app.route('/normalize_db_table', methods=['POST'])
-def normalize_db_table():
-    data = request.get_json()
-    database = data['database']
-    table = data['table']
-    try:
-        structure, _ = get_table_structure(database, table)
-        df_structure = pd.DataFrame(structure)
-        df_data = get_table_data(database, table)
-        analysis = analyze_table_normalization(df_data, df_structure)
-        if analysis['necesita_normalizar']:
-            tables = {f"{table}_normalizada": df_data.drop_duplicates().reset_index(drop=True)}
-            upload_normalized_tables(database, tables)
-            return jsonify({
-                'success': True,
-                'message': f"Tabla normalizada y guardada como '{table}_normalizada'."
-            })
-        else:
-            return jsonify({'success': True, 'message': 'Ya está normalizada.'})
-    except Exception as e:
-        return jsonify({'success': False, 'error': str(e)})
+                df_estructura = leer_estructura_completa(conn)
+                conn.close()
+
+                if df_estructura.empty:
+                    return "❌ No se pudo generar la estructura", 500
+
+                output = io.StringIO()
+                df_estructura.to_csv(output, index=False, encoding='utf-8')
+                output.seek(0)
+
+                response = make_response(output.getvalue())
+                response.headers["Content-Disposition"] = "attachment; filename=estructura_completa.csv"
+                response.headers["Content-Type"] = "text/csv; charset=utf-8"
+                return response
+
+            except Exception as e:
+                print(f"❌ Error en descargar_estructura: {e}")
+                return f"❌ Error interno: {e}", 500
+
+        # --- Descargar datos (todos en un solo CSV) ---
+        elif action == 'descargar_datos':
+            try:
+                conn = conectar_sql_server(server, db_name)
+                if not conn:
+                    return "❌ No se pudo conectar a SQL Server", 500
+
+                tablas = listar_tablas(conn)
+                if not tablas:
+                    conn.close()
+                    return "❌ No se encontraron tablas", 500
+
+                registros = []
+                for tabla in tablas:
+                    try:
+                        df = leer_tabla_completa(conn, tabla)
+                        if not df.empty:
+                            df['__tabla'] = tabla
+                            registros.append(df)
+                    except Exception as e:
+                        print(f"❌ Error leyendo {tabla}: {e}")
+
+                conn.close()
+
+                if not registros:
+                    return "❌ No se pudieron leer los datos", 500
+
+                df_datos = pd.concat(registros, ignore_index=True)
+                output = io.StringIO()
+                df_datos.to_csv(output, index=False, encoding='utf-8')
+                output.seek(0)
+
+                response = make_response(output.getvalue())
+                response.headers["Content-Disposition"] = "attachment; filename=datos_completos.csv"
+                response.headers["Content-Type"] = "text/csv; charset=utf-8"
+                return response
+
+            except Exception as e:
+                print(f"❌ Error en descargar_datos: {e}")
+                return f"❌ Error interno: {e}", 500
+
+        # --- Analizar base de datos conectada ---
+        elif action == 'analizar_bd':
+            try:
+                conn = conectar_sql_server(server, db_name)
+                if not conn:
+                    return "❌ No se pudo conectar a SQL Server", 500
+
+                df_estructura = leer_estructura_completa(conn)
+                dependencias = extraer_dependencias(df_estructura)
+
+                tablas = listar_tablas(conn)
+                resultados = []
+
+                for tabla in tablas:
+                    try:
+                        df = leer_tabla_completa(conn, tabla)
+                        if df.empty:
+                            continue
+                        df.name = tabla
+
+                        # 1FN
+                        if not esta_en_1fn(df):
+                            fn1 = "❌ No está en 1FN"
+                        else:
+                            fn1 = "✅ En 1FN"
+
+                        # 2FN
+                        pk = obtener_pk(df_estructura, tabla)
+                        deps = dependencias.get(tabla, [])
+                        if tiene_dependencia_parcial(df, pk, deps):
+                            fn2 = "❌ No está en 2FN"
+                        else:
+                            fn2 = "✅ En 2FN"
+
+                        # 3FN
+                        if tiene_dependencia_transitiva(deps):
+                            fn3 = "❌ No está en 3FN"
+                        else:
+                            fn3 = "✅ En 3FN"
+
+                        resultados.append({
+                            'tabla': tabla,
+                            '1FN': fn1,
+                            '2FN': fn2,
+                            '3FN': fn3
+                        })
+                    except Exception as e:
+                        print(f"❌ Error analizando {tabla}: {e}")
+                        resultados.append({
+                            'tabla': tabla,
+                            '1FN': 'Error',
+                            '2FN': 'Error',
+                            '3FN': 'Error'
+                        })
+
+                conn.close()
+                analisis = pd.DataFrame(resultados).to_html(classes="table table-striped table-hover", index=False, escape=False)
+
+                return render_template('index.html',
+                                       server=server,
+                                       db_name=db_name,
+                                       tablas=tablas,
+                                       analisis=analisis,
+                                       modo=modo)
+
+            except Exception as e:
+                print(f"❌ Error en analizar_bd: {e}")
+                return f"❌ Error interno: {e}", 500
+
+        # --- Analizar archivos CSV subidos ---
+        elif action == 'analizar_archivos':
+            try:
+                archivo_estructura = request.files.get('estructura')
+                archivo_datos = request.files.get('datos')
+
+                if not archivo_estructura or not archivo_datos:
+                    return "❌ Faltan archivos: estructura.csv y datos.csv", 400
+
+                # ✅ CORRECCIÓN CLAVE: Usa engine='python' para manejar comas en campos entre comillas
+                df_estructura = pd.read_csv(archivo_estructura, engine='python', encoding='utf-8')
+                df_datos = pd.read_csv(archivo_datos, engine='python', encoding='utf-8')
+
+                # Validación básica
+                expected_cols_estructura = ['tabla', 'atributo', 'tipo', 'llave', 'dependencia_funcional(A→B)']
+                if not all(col in df_estructura.columns for col in expected_cols_estructura):
+                    return f"❌ Estructura CSV inválida. Se esperan: {expected_cols_estructura}", 400
+
+                if df_estructura.empty or df_datos.empty:
+                    return "❌ Los archivos están vacíos", 400
+
+                # Procesar análisis por tabla
+                if '__tabla' in df_datos.columns:
+                    tablas = df_datos['__tabla'].unique()
+                else:
+                    tablas = ['DatosAnalizados']
+
+                dependencias = extraer_dependencias(df_estructura)
+                resultados = []
+
+                for tabla in tablas:
+                    try:
+                        df = df_datos[df_datos['__tabla'] == tabla] if '__tabla' in df_datos.columns else df_datos
+                        df.name = tabla
+
+                        # 1FN
+                        if not esta_en_1fn(df):
+                            fn1 = "❌ No está en 1FN"
+                        else:
+                            fn1 = "✅ En 1FN"
+
+                        # 2FN
+                        pk = obtener_pk(df_estructura, tabla)
+                        deps = dependencias.get(tabla, [])
+                        if tiene_dependencia_parcial(df, pk, deps):
+                            fn2 = "❌ No está en 2FN"
+                        else:
+                            fn2 = "✅ En 2FN"
+
+                        # 3FN
+                        if tiene_dependencia_transitiva(deps):
+                            fn3 = "❌ No está en 3FN"
+                        else:
+                            fn3 = "✅ En 3FN"
+
+                        resultados.append({
+                            'tabla': tabla,
+                            '1FN': fn1,
+                            '2FN': fn2,
+                            '3FN': fn3
+                        })
+                    except Exception as e:
+                        print(f"❌ Error analizando {tabla}: {e}")
+                        resultados.append({
+                            'tabla': tabla,
+                            '1FN': 'Error',
+                            '2FN': 'Error',
+                            '3FN': 'Error'
+                        })
+
+                analisis = pd.DataFrame(resultados).to_html(classes="table table-striped table-hover", index=False, escape=False)
+
+                return render_template('index.html', analisis=analisis, modo=modo)
+
+            except pd.errors.ParserError as e:
+                print(f"❌ Error de parsing CSV: {e}")
+                return f"❌ Error al leer el archivo CSV. Asegúrate de que las comas dentro de campos estén entre comillas.", 400
+            except Exception as e:
+                print(f"❌ Error en analizar_archivos: {e}")
+                return f"❌ Error interno: {str(e)}", 500
+
+    return render_template('index.html',
+                           server=server,
+                           bases_datos=bases_datos,
+                           db_name=db_name,
+                           tablas=tablas,
+                           modo=modo)
 
 
 if __name__ == '__main__':
     import webbrowser
     import threading
+
     def open_browser():
         webbrowser.open("http://127.0.0.1:5000")
-    threading.Timer(1.0, open_browser).start()
-    app.run(debug=False, host='127.0.0.1', port=5000)
+
+    threading.Timer(2.0, open_browser).start()
+    
+    app.run(debug=True, host='127.0.0.1', port=5000)

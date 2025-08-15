@@ -13,382 +13,165 @@
 </head>
 <body>
     <div class="container">
-        <div class="main-container fade-in">
-            <h1 class="page-title">
-                <i class="fas fa-database"></i> Normalización Automatizada
-            </h1>
-
-            <!-- Conexión a SQL Server -->
-            <form method="POST" class="mb-4">
-                <div class="row align-items-end">
-                    <div class="col-md-4">
-                        <label for="server" class="form-label fw-semibold">
-                            <i class="fas fa-server me-2"></i>Servidor SQL Server
-                        </label>
-                        <input type="text" name="server" id="server" class="form-control" value="{{ server or 'localhost' }}" required>
-                    </div>
-                    <div class="col-md-8">
-                        <button type="submit" name="action" value="listar_bd" class="btn btn-primary me-2">
-                            <i class="fas fa-sync"></i> Listar Bases de Datos
-                        </button>
-                        <button type="button" class="btn btn-warning" id="btnAnalyzeDB" {% if not bases_datos %}disabled{% endif %}>
-                            <i class="fas fa-magnifying-glass"></i> Analizar BD Completa
-                        </button>
-                    </div>
-                </div>
-            </form>
-
-            <!-- Selección de Base de Datos -->
-            {% if bases_datos %}
-            <div class="card">
-                <div class="card-body">
-                    <h5 class="card-title">
-                        <i class="fas fa-database"></i> Seleccionar Base de Datos
-                    </h5>
-                    <form method="POST">
-                        <input type="hidden" name="server" value="{{ server }}">
-                        <div class="mb-3">
-                            <select name="database" id="databaseSelect" class="form-select" required>
-                                <option value="">Seleccionar Base de Datos</option>
-                                {% for db in bases_datos %}
-                                <option value="{{ db }}" {% if db_name == db %}selected{% endif %}>{{ db }}</option>
-                                {% endfor %}
-                            </select>
-                        </div>
-                        <button type="submit" name="action" value="listar_bd" class="btn btn-outline-secondary btn-sm">
-                            <i class="fas fa-list"></i> Cargar Tablas
-                        </button>
-                    </form>
-                </div>
-            </div>
-            {% endif %}
-
-            <!-- Selección de Tabla y Descarga de Archivos -->
-            {% if tablas %}
-            <div class="card">
-                <div class="card-body">
-                    <h5 class="card-title">
-                        <i class="fas fa-table"></i> Seleccionar Tabla
-                    </h5>
-                    <form method="POST">
-                        <input type="hidden" name="server" value="{{ server }}">
-                        <input type="hidden" name="database" value="{{ db_name }}">
-                        <div class="mb-3">
-                            <select name="tabla" id="tableSelect" class="form-select" required>
-                                <option value="">Seleccionar Tabla</option>
-                                {% for t in tablas %}
-                                <option value="{{ t }}">{{ t }}</option>
-                                {% endfor %}
-                            </select>
-                        </div>
-                        <div class="btn-group w-100 mb-2" role="group">
-                            <button type="submit" name="action" value="descargar_estructura" class="btn btn-outline-info">
-                                <i class="fas fa-file-csv"></i> Descargar Estructura
-                            </button>
-                            <button type="submit" name="action" value="descargar_datos" class="btn btn-outline-success">
-                                <i class="fas fa-file-csv"></i> Descargar Datos
-                            </button>
-                            <button type="button" class="btn btn-outline-warning" id="btnAnalyzeTable">
-                                <i class="fas fa-search"></i> Analizar Tabla
-                            </button>
-                        </div>
-                        <button type="button" class="btn btn-danger w-100" id="btnNormalizeTable">
-                            <i class="fas fa-cogs"></i> Normalizar Esta Tabla
-                        </button>
-                    </form>
-                </div>
-            </div>
-            {% endif %}
-
-            <!-- Carga de Archivos para Normalización -->
-            {% if db_name %}
-            <div class="card">
-                <div class="card-body">
-                    <h5 class="card-title">
-                        <i class="fas fa-upload"></i> Analizar y Normalizar desde CSV
-                    </h5>
-                    <form method="POST" enctype="multipart/form-data" id="form-normalizar">
-                        <input type="hidden" name="server" value="{{ server }}">
-                        <input type="hidden" name="database" value="{{ db_name }}">
-                        <div class="row">
-                            <div class="col-md-6">
-                                <div class="mb-3">
-                                    <label class="form-label"><i class="fas fa-file-csv"></i> Estructura (CSV)</label>
-                                    <input type="file" name="estructura" class="form-control" accept=".csv" required>
-                                    <div class="form-text">Con dependencias funcionales</div>
-                                </div>
-                            </div>
-                            <div class="col-md-6">
-                                <div class="mb-3">
-                                    <label class="form-label"><i class="fas fa-database"></i> Datos (CSV)</label>
-                                    <input type="file" name="datos" class="form-control" accept=".csv" required>
-                                    <div class="form-text">Datos no normalizados</div>
-                                </div>
-                            </div>
-                        </div>
-                        <div class="d-flex gap-2">
-                            <button type="button" class="btn btn-info flex-grow-1" id="btnAnalyzeCSV">
-                                <i class="fas fa-search"></i> Analizar CSVs
-                            </button>
-                            <button type="submit" name="action" value="analizar_normalizar" class="btn btn-primary flex-grow-1">
-                                <span class="btn-text"><i class="fas fa-cogs me-2"></i>Analizar y Normalizar</span>
-                                <span class="loading-spinner"><i class="fas fa-spinner fa-spin me-2"></i>Procesando...</span>
-                            </button>
-                        </div>
-                    </form>
-                </div>
-            </div>
-            {% endif %}
-
-            <!-- Resultados del Análisis -->
-            {% if analisis %}
-            <div class="card fade-in">
-                <div class="card-header">
-                    <i class="fas fa-search"></i> Resultados del Análisis de Normalización
-                </div>
-                <div class="card-body">
-                    {% if analisis['1fn'] %}
-                    <div class="alert alert-1fn">
-                        <strong>1FN:</strong> {{ analisis['1fn'] }}
-                    </div>
-                    {% endif %}
-
-                    {% if analisis['2fn'] %}
-                    <div class="alert alert-2fn">
-                        <strong>2FN:</strong> {{ analisis['2fn'] }}
-                    </div>
-                    {% endif %}
-
-                    {% if analisis['3fn'] %}
-                    <div class="alert alert-3fn">
-                        <strong>3FN:</strong> {{ analisis['3fn'] }}
-                    </div>
-                    {% endif %}
-
-                    {% if analisis['sql'] %}
-                    <div class="alert alert-success">
-                        <i class="fas fa-check"></i> {{ analisis['sql'] }}
-                    </div>
-                    {% endif %}
-                </div>
-            </div>
-            {% endif %}
-
-            <!-- Datos Analizados -->
-            {% if datos %}
-            <div class="card fade-in">
-                <div class="card-header">
-                    <i class="fas fa-database"></i> Vista Previa de Datos (primeras filas)
-                </div>
-                <div class="card-body">
-                    <div class="table-responsive">
-                        {{ datos | safe }}
-                    </div>
-                </div>
-            </div>
-            {% endif %}
-
-            <!-- Estructura Analizada -->
-            {% if estructura %}
-            <div class="card fade-in">
-                <div class="card-header">
-                    <i class="fas fa-table"></i> Estructura Cargada
-                </div>
-                <div class="card-body">
-                    <div class="table-responsive">
-                        {{ estructura | safe }}
-                    </div>
-                </div>
-            </div>
-            {% endif %}
+        <!-- Encabezado del Proyecto -->
+        <div class="text-center mb-4">
+            <h1 class="page-title">Normalización Automatizada</h1>
+            <p class="lead">
+                <strong>Proyecto de Grupo #4 – Administración de Bases de Datos 2</strong><br>
+                Primer Parcial
+            </p>
         </div>
-    </div>
 
-    <!-- Modal de Análisis -->
-    <div class="modal fade" id="analyzeModal" tabindex="-1">
-        <div class="modal-dialog modal-lg">
-            <div class="modal-content">
-                <div class="modal-header">
-                    <h5 class="modal-title"><i class="fas fa-search"></i> Análisis de Normalización</h5>
-                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-                </div>
-                <div class="modal-body" id="analyzeResults">
-                    <div class="text-center text-muted">
-                        <i class="fas fa-sync fa-spin fa-2x"></i>
-                        <p>Cargando análisis...</p>
-                    </div>
-                </div>
-                <div class="modal-footer">
-                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cerrar</button>
-                    <button type="button" class="btn btn-success" id="btnNormalizeNow">
-                        <i class="fas fa-check"></i> Normalizar Ahora
+        <!-- Opciones Principales -->
+        <div class="card mb-4">
+            <div class="card-body text-center">
+                <h4>Selecciona un modo de análisis</h4>
+                <div class="btn-group d-flex gap-4 justify-content-center mt-3" style="max-width: 800px; margin: 0 auto;">
+                    <!-- Opción 1: Analizar Base de Datos -->
+                    <button type="button" class="btn btn-primary btn-lg flex-fill" onclick="mostrarModo('conexion')">
+                        <i class="fas fa-plug fa-2x d-block"></i>
+                        <strong>1. Analizar Base de Datos</strong>
+                        <p class="small mt-2">Conéctate a SQL Server y analiza tablas existentes</p>
+                    </button>
+
+                    <!-- Opción 2: Analizar Archivos CSV -->
+                    <button type="button" class="btn btn-success btn-lg flex-fill" onclick="mostrarModo('archivos')">
+                        <i class="fas fa-file-csv fa-2x d-block"></i>
+                        <strong>2. Analizar Archivos CSV</strong>
+                        <p class="small mt-2">Sube tus archivos estructura.csv y datos.csv</p>
                     </button>
                 </div>
             </div>
         </div>
+
+        <!-- Formulario: Analizar Base de Datos -->
+        <div id="modo-conexion" class="modo" style="display: none;">
+            <div class="card">
+                <div class="card-body">
+                    <h5 class="card-title"><i class="fas fa-plug"></i> Conexión a SQL Server</h5>
+                    <form method="POST">
+                        <input type="hidden" name="modo" value="conexion">
+                        <div class="row">
+                            <div class="col-md-6 mb-3">
+                                <label class="form-label">Servidor SQL Server</label>
+                                <input type="text" name="server" class="form-control" value="localhost" required>
+                            </div>
+                        </div>
+                        <button type="submit" name="action" value="listar_bd" class="btn btn-primary">
+                            <i class="fas fa-sync"></i> Conectar y Listar BD
+                        </button>
+                    </form>
+                </div>
+            </div>
+        </div>
+
+        <!-- Formulario: Analizar Archivos CSV -->
+        <div id="modo-archivos" class="modo" style="display: none;">
+            <div class="card">
+                <div class="card-body">
+                    <h5 class="card-title"><i class="fas fa-file-upload"></i> Subir Archivos CSV</h5>
+                    <form method="POST" enctype="multipart/form-data">
+                        <input type="hidden" name="modo" value="archivos">
+                        <div class="mb-3">
+                            <label class="form-label"><i class="fas fa-file-csv"></i> Estructura (CSV)</label>
+                            <input type="file" name="estructura" class="form-control" accept=".csv" required>
+                            <div class="form-text">Con todas las tablas (tabla, atributo, tipo, llave, dependencia_funcional)</div>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label"><i class="fas fa-database"></i> Datos (CSV)</label>
+                            <input type="file" name="datos" class="form-control" accept=".csv" required>
+                            <div class="form-text">Todos los datos combinados (con columna opcional __tabla)</div>
+                        </div>
+                        <button type="submit" name="action" value="analizar_archivos" class="btn btn-primary">
+                            <i class="fas fa-search"></i> Analizar Archivos
+                        </button>
+                    </form>
+                </div>
+            </div>
+        </div>
+
+        <!-- Flujo de Conexión -->
+        {% if modo == 'conexion' and bases_datos %}
+        <div class="card mb-4">
+            <div class="card-body">
+                <h5 class="card-title">
+                    <i class="fas fa-database"></i> Seleccionar Base de Datos
+                </h5>
+                <form method="POST">
+                    <input type="hidden" name="server" value="{{ server }}">
+                    <input type="hidden" name="modo" value="conexion">
+                    <div class="mb-3">
+                        <select name="database" class="form-select" required>
+                            <option value="">Seleccionar Base de Datos</option>
+                            {% for db in bases_datos %}
+                            <option value="{{ db }}" {% if db_name == db %}selected{% endif %}>{{ db }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <button type="submit" name="action" value="listar_bd" class="btn btn-outline-secondary btn-sm">
+                        <i class="fas fa-list"></i> Cargar Tablas
+                    </button>
+                </form>
+            </div>
+        </div>
+        {% endif %}
+
+        {% if db_name %}
+        <div class="card mb-4">
+            <div class="card-body">
+                <h5 class="card-title">
+                    <i class="fas fa-download"></i> Descargar Estructura y Datos
+                </h5>
+                <form method="POST">
+                    <input type="hidden" name="server" value="{{ server }}">
+                    <input type="hidden" name="database" value="{{ db_name }}">
+                    <input type="hidden" name="modo" value="conexion">
+                    <div class="btn-group w-100 mb-3" role="group">
+                        <button type="submit" name="action" value="descargar_estructura" class="btn btn-outline-info">
+                            <i class="fas fa-file-csv"></i> Descargar Estructura
+                        </button>
+                        <button type="submit" name="action" value="descargar_datos" class="btn btn-outline-success">
+                            <i class="fas fa-file-csv"></i> Descargar Datos Completos
+                        </button>
+                    </div>
+                </form>
+
+                <h5 class="card-title mt-4">
+                    <i class="fas fa-cogs"></i> Analizar Base de Datos
+                </h5>
+                <form method="POST">
+                    <input type="hidden" name="server" value="{{ server }}">
+                    <input type="hidden" name="database" value="{{ db_name }}">
+                    <input type="hidden" name="modo" value="conexion">
+                    <button type="submit" name="action" value="analizar_bd" class="btn btn-primary">
+                        <i class="fas fa-search"></i> Analizar Toda la Base de Datos
+                    </button>
+                </form>
+            </div>
+        </div>
+        {% endif %}
+
+        <!-- Resultados del Análisis -->
+        {% if analisis %}
+        <div class="card fade-in">
+            <div class="card-header">
+                <i class="fas fa-search"></i> Resultados del Análisis de Normalización
+            </div>
+            <div class="card-body">
+                {{ analisis | safe }}
+            </div>
+        </div>
+        {% endif %}
+
     </div>
 
-    <!-- Bootstrap JS -->
+    <!-- Scripts -->
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
     <script>
-        document.addEventListener('DOMContentLoaded', function () {
-            const dbSelect = document.getElementById('databaseSelect');
-            const tableSelect = document.getElementById('tableSelect');
-            const analyzeModal = new bootstrap.Modal(document.getElementById('analyzeModal'));
-            let currentDatabase = "{{ db_name }}";
-            let currentTable = null;
-
-            // Botón: Analizar BD completa
-            document.getElementById('btnAnalyzeDB')?.addEventListener('click', async () => {
-                if (!currentDatabase) return alert('Selecciona una base de datos');
-                const res = await fetch(`/analyze_db/${currentDatabase}`);
-                const results = await res.json();
-
-                let html = '<ul class="list-group">';
-                for (const [table, analysis] of Object.entries(results)) {
-                    if (analysis.error) continue;
-                    const needs = analysis.necesita_normalizar ? 'list-group-item-danger fw-bold' : 'list-group-item-success';
-                    html += `
-                        <li class="list-group-item ${needs}">
-                            <strong>${table}</strong>
-                            <ul class="mt-2 mb-0">
-                                <li>${analysis['1fn'].mensaje}</li>
-                                <li>${analysis['2fn'].mensaje}</li>
-                                <li>${analysis['3fn'].mensaje}</li>
-                            </ul>
-                        </li>`;
-                }
-                html += '</ul>';
-                document.getElementById('analyzeResults').innerHTML = html;
-                analyzeModal.show();
-            });
-
-            // Botón: Analizar tabla seleccionada
-            document.getElementById('btnAnalyzeTable')?.addEventListener('click', async () => {
-                const table = tableSelect.value;
-                if (!table) return alert('Selecciona una tabla');
-                currentTable = table;
-                const res = await fetch(`/analyze_db/${currentDatabase}`);
-                const results = await res.json();
-                const analysis = results[table];
-
-                if (analysis.error) {
-                    document.getElementById('analyzeResults').innerHTML = `<div class="alert alert-danger">${analysis.error}</div>`;
-                } else {
-                    const needs = analysis.necesita_normalizar ? '⚠️ Necesita normalización' : '✅ Ya está normalizada';
-                    const color = analysis.necesita_normalizar ? 'text-danger fw-bold' : 'text-success';
-                    document.getElementById('analyzeResults').innerHTML = `
-                        <h6>Tabla: <strong>${table}</strong></h6>
-                        <p class="${color}">${needs}</p>
-                        <ul class="list-group">
-                            <li class="list-group-item ${analysis['1fn'].cumple ? 'list-group-item-success' : 'list-group-item-warning'}">
-                                ${analysis['1fn'].mensaje}
-                            </li>
-                            <li class="list-group-item ${analysis['2fn'].cumple ? 'list-group-item-success' : 'list-group-item-warning'}">
-                                ${analysis['2fn'].mensaje}
-                            </li>
-                            <li class="list-group-item ${analysis['3fn'].cumple ? 'list-group-item-success' : 'list-group-item-warning'}">
-                                ${analysis['3fn'].mensaje}
-                            </li>
-                        </ul>
-                    `;
-                }
-                analyzeModal.show();
-            });
-
-            // Botón: Normalizar tabla
-            document.getElementById('btnNormalizeTable')?.addEventListener('click', async () => {
-                if (!currentDatabase || !tableSelect.value) return alert('Selecciona BD y tabla');
-                if (!confirm(`¿Deseas normalizar la tabla '${tableSelect.value}' ahora?`)) return;
-
-                const res = await fetch('/normalize_db_table', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        database: currentDatabase,
-                        table: tableSelect.value
-                    })
-                });
-                const data = await res.json();
-                alert(data.message || data.error);
-            });
-
-            // Botón: Analizar CSVs
-            document.getElementById('btnAnalyzeCSV')?.addEventListener('click', async () => {
-                const form = document.getElementById('form-normalizar');
-                const estructura = form.querySelector('input[name="estructura"]').files[0];
-                const datos = form.querySelector('input[name="datos"]').files[0];
-                if (!estructura || !datos) return alert('Sube ambos archivos CSV');
-
-                const formData = new FormData();
-                formData.append('estructura', estructura);
-                formData.append('datos', datos);
-
-                const res = await fetch('/analyze_csv', { method: 'POST', body: formData });
-                const data = await res.json();
-
-                if (data.error) {
-                    document.getElementById('analyzeResults').innerHTML = `<div class="alert alert-danger">${data.error}</div>`;
-                } else {
-                    const a = data.resultado;
-                    const needs = a.necesita_normalizar ? '⚠️ Necesita normalización' : '✅ Ya está normalizada';
-                    const color = a.necesita_normalizar ? 'text-danger fw-bold' : 'text-success';
-                    document.getElementById('analyzeResults').innerHTML = `
-                        <h6>Desde CSV: <strong>${data.tabla}</strong></h6>
-                        <p class="${color}">${needs}</p>
-                        <ul class="list-group">
-                            <li class="list-group-item ${a['1fn'].cumple ? 'list-group-item-success' : 'list-group-item-warning'}">
-                                ${a['1fn'].mensaje}
-                            </li>
-                            <li class="list-group-item ${a['2fn'].cumple ? 'list-group-item-success' : 'list-group-item-warning'}">
-                                ${a['2fn'].mensaje}
-                            </li>
-                            <li class="list-group-item ${a['3fn'].cumple ? 'list-group-item-success' : 'list-group-item-warning'}">
-                                ${a['3fn'].mensaje}
-                            </li>
-                        </ul>
-                    `;
-                }
-                analyzeModal.show();
-            });
-
-            // Normalizar ahora desde modal
-            document.getElementById('btnNormalizeNow')?.addEventListener('click', async () => {
-                if (currentTable && confirm(`¿Normalizar '${currentTable}' ahora?`)) {
-                    const res = await fetch('/normalize_db_table', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ database: currentDatabase, table: currentTable })
-                    });
-                    const data = await res.json();
-                    alert(data.message);
-                    document.querySelector('#analyzeModal .btn-close').click();
-                }
-            });
-
-            // Validación CSV
-            document.getElementById('form-normalizar')?.addEventListener('submit', function (e) {
-                const estructura = this.querySelector('input[name="estructura"]').files[0];
-                const datos = this.querySelector('input[name="datos"]').files[0];
-                if (estructura && !estructura.name.endsWith('.csv')) {
-                    e.preventDefault(); alert('Solo CSV');
-                }
-                if (datos && !datos.name.endsWith('.csv')) {
-                    e.preventDefault(); alert('Solo CSV');
-                }
-            });
-
-            // Animación de carga
-            document.querySelectorAll('form').forEach(form => {
-                form.addEventListener('submit', function () {
-                    const btn = this.querySelector('.btn-primary');
-                    if (btn) {
-                        btn.classList.add('loading');
-                        setTimeout(() => btn.disabled = true, 100);
-                    }
-                });
-            });
-        });
+        function mostrarModo(modo) {
+            document.querySelectorAll('.modo').forEach(div => div.style.display = 'none');
+            document.getElementById('modo-' + modo).style.display = 'block';
+        }
     </script>
 </body>
 </html>
