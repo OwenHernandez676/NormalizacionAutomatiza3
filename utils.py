@@ -4,7 +4,8 @@ import pandas as pd
 from sqlalchemy import create_engine
 import urllib
 
-def conectar_sql_server(server="localhost", database=None):
+# El servidor por defecto se ajusta a "OWEN" para facilitar la conexión.
+def conectar_sql_server(server="OWEN", database=None):
     """Conecta a SQL Server con autenticación de Windows"""
     try:
         conn_str = (
@@ -38,7 +39,7 @@ def listar_tablas(conn):
     try:
         query = """
         SELECT CONCAT(TABLE_SCHEMA, '.', TABLE_NAME) AS full_table_name
-        FROM INFORMATION_SCHEMA.TABLES 
+        FROM INFORMATION_SCHEMA.TABLES
         WHERE TABLE_TYPE = 'BASE TABLE'
         ORDER BY TABLE_SCHEMA, TABLE_NAME
         """
@@ -63,7 +64,7 @@ def leer_estructura_completa(conn):
     """Genera estructura completa de todas las tablas"""
     try:
         query_cols = """
-        SELECT 
+        SELECT
             s.name + '.' + t.name AS tabla,
             c.name AS atributo,
             ty.name AS tipo,
@@ -80,7 +81,7 @@ def leer_estructura_completa(conn):
 
         # PK
         query_pk = """
-        SELECT 
+        SELECT
             s.name + '.' + t.name AS tabla,
             c.name AS atributo
         FROM sys.indexes i
@@ -95,7 +96,7 @@ def leer_estructura_completa(conn):
 
         # FK
         query_fk = """
-        SELECT 
+        SELECT
             s.name + '.' + t.name AS tabla,
             c.name AS atributo
         FROM sys.foreign_key_columns fkc
@@ -150,9 +151,10 @@ def leer_estructura_completa(conn):
 def crear_tabla_desde_df(conn, nombre_tabla, df):
     """Crea o reemplaza una tabla desde un DataFrame"""
     try:
+        server_name = conn.getinfo(pyodbc.SQL_SERVER_NAME)
         params = urllib.parse.quote_plus(
             f"DRIVER={{ODBC Driver 17 for SQL Server}};"
-            f"SERVER=localhost;"
+            f"SERVER={server_name};"
             f"DATABASE={conn.getinfo(pyodbc.SQL_DATABASE_NAME)};"
             f"Trusted_Connection=yes;"
         )

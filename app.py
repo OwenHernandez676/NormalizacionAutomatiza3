@@ -36,7 +36,7 @@ def index():
     bases_datos = []
     tablas = []
     analisis = {}
-    server = request.form.get('server', 'localhost')
+    server = request.form.get('server', 'OWEN')
     db_name = request.form.get('database')
     modo = request.form.get('modo', 'conexion')  # 'conexion' o 'archivos'
 
