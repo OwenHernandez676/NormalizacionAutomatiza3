@@ -163,6 +163,17 @@
         </div>
         {% endif %}
 
+        {% if script_sql %}
+        <div class="card mt-4 fade-in">
+            <div class="card-header">
+                <i class="fas fa-code"></i> Script SQL Normalizado
+            </div>
+            <div class="card-body">
+                <pre>{{ script_sql }}</pre>
+            </div>
+        </div>
+        {% endif %}
+
     </div>
 
     <!-- Scripts -->

@@ -20,7 +20,9 @@ try:
         obtener_pk,
         tiene_dependencia_parcial,
         aplicar_2fn,
-        tiene_dependencia_transitiva
+        tiene_dependencia_transitiva,
+        normalizar_tabla,
+        generar_script_sql
     )
 except Exception as e:
     print(f"❌ Error al importar módulos: {e}")
@@ -141,6 +143,7 @@ def index():
 
                 tablas = listar_tablas(conn)
                 resultados = []
+                tablas_normalizadas = {}
 
                 for tabla in tablas:
                     try:
@@ -175,6 +178,10 @@ def index():
                             '2FN': fn2,
                             '3FN': fn3
                         })
+
+                        tablas_norm = normalizar_tabla(df, pk, deps)
+                        for nombre, dfn in tablas_norm.items():
+                            tablas_normalizadas[nombre] = dfn
                     except Exception as e:
                         print(f"❌ Error analizando {tabla}: {e}")
                         resultados.append({
@@ -186,12 +193,14 @@ def index():
 
                 conn.close()
                 analisis = pd.DataFrame(resultados).to_html(classes="table table-striped table-hover", index=False, escape=False)
+                script_sql = generar_script_sql(tablas_normalizadas)
 
                 return render_template('index.html',
                                        server=server,
                                        db_name=db_name,
                                        tablas=tablas,
                                        analisis=analisis,
+                                       script_sql=script_sql,
                                        modo=modo)
 
             except Exception as e:
@@ -227,6 +236,7 @@ def index():
 
                 dependencias = extraer_dependencias(df_estructura)
                 resultados = []
+                tablas_normalizadas = {}
 
                 for tabla in tablas:
                     try:
@@ -259,6 +269,10 @@ def index():
                             '2FN': fn2,
                             '3FN': fn3
                         })
+
+                        tablas_norm = normalizar_tabla(df, pk, deps)
+                        for nombre, dfn in tablas_norm.items():
+                            tablas_normalizadas[nombre] = dfn
                     except Exception as e:
                         print(f"❌ Error analizando {tabla}: {e}")
                         resultados.append({
@@ -269,8 +283,9 @@ def index():
                         })
 
                 analisis = pd.DataFrame(resultados).to_html(classes="table table-striped table-hover", index=False, escape=False)
+                script_sql = generar_script_sql(tablas_normalizadas)
 
-                return render_template('index.html', analisis=analisis, modo=modo)
+                return render_template('index.html', analisis=analisis, script_sql=script_sql, modo=modo)
 
             except pd.errors.ParserError as e:
                 print(f"❌ Error de parsing CSV: {e}")

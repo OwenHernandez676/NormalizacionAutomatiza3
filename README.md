@@ -9,7 +9,7 @@ Desarrollar una aplicación web que permita:
 1. Cargar una estructura de base de datos desde archivo o conexión.
 2. Analizar si está normalizada (1FN, 2FN, 3FN).
 3. Transformarla automáticamente a la forma normal siguiente.
-4. Visualizar las nuevas entidades/tablas normalizadas (diagrama o script SQL).
+4. Visualizar las nuevas entidades/tablas normalizadas mediante un **script SQL** generado automáticamente.
 
 ## 🗂️ Estructura del Proyecto
 
